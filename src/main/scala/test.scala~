@@ -1,0 +1,40 @@
+import org.apache.spark._
+import org.apache.spark.graphx._
+// To make some of the examples work we will also need RDD
+import org.apache.spark.rdd.RDD
+import scala.util.MurmurHash
+import org.apache.spark.SparkConf
+import org.apache.spark.sql.functions._
+import java.io._
+
+object Test { 
+	def main(args: Array[String]) { 
+		val conf = new SparkConf().setAppName("Simple Application")
+    		val sc = new SparkContext(conf)
+		val sqlContext = new org.apache.spark.sql.SQLContext(sc)
+		val df = sqlContext.read.format("com.databricks.spark.csv").option("header", "true").option("inferSchema", "true").load(args(0))
+		df.registerTempTable("data")
+		//select only columns needed
+		val links=sqlContext.sql("select DISTINCT uid,retweeted_uid from data where retweeted_uid <> '' and uid<>retweeted_uid").rdd
+		//convert uid into long with hash function 
+		val edgesRDD: RDD[(VertexId, VertexId)] =links.map(l=>(MurmurHash.stringHash(l(0).toString()),MurmurHash.stringHash(l(1).toString())))
+		//transform egdes into graph
+		val graph = Graph.fromEdgeTuples(edgesRDD, 1)
+		// call pagerank
+		val ranks = graph.pageRank(args(1).toDouble).vertices
+		
+		// generate user map into hash function =>for display result later
+		val users:RDD[(VertexId, String)] = links.map(l=>l(0).toString()).distinct().map(x=>(MurmurHash.stringHash(x),x))
+		//map the long back to uid
+		val ranksByUsername = users.join(ranks).map {
+  			case (id, (username, rank)) => (username, rank)
+		}
+// Print the result
+		val test1=ranksByUsername.sortBy(_._2,false).take(20)
+		val f = new PrintWriter(new File(args(2)))
+		f.write(test1.mkString("\n"))
+		f.close	
+		println(test1.mkString("\n"))
+				
+	} 
+}
